@@ -1,0 +1,10 @@
+{
+  "name": "redos-lab",
+  "version": "0.1.0",
+  "description": "A tiny audit fixture for evidence-gated ReDoS differential testing",
+  "main": "index.js",
+  "scripts": {
+    "poc": "node test/poc.js"
+  },
+  "license": "MIT"
+}
