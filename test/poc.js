@@ -1,34 +1,45 @@
 'use strict';
 
-// Differential PoC for the ReDoS audit.
-// Benign input should return fast; malicious input should blow past the
-// timing threshold due to catastrophic backtracking in ([a-z]+)+.
-const { validateEmail } = require('../index');
+// Differential + RED/GREEN evidence for the ReDoS fix.
+//   RED   = vulnerable.js blows up on the malicious input
+//   GREEN = index.js (patched) stays fast on the same input
+// The gate is machine-checkable: no human judgment about "is it slow enough".
 
-function measure(input) {
+const vulnerable = require('../vulnerable');
+const patched = require('../index');
+
+function measure(fn, input) {
   const start = process.hrtime.bigint();
-  const result = validateEmail(input);
+  const result = fn(input);
   const ms = Number(process.hrtime.bigint() - start) / 1e6;
-  return { input: input.length > 40 ? input.slice(0, 40) + '...' : input, result, ms: Number(ms.toFixed(3)) };
+  return { result, ms: Number(ms.toFixed(3)) };
 }
 
-const benign = measure('user@example.com');
-// Bounded input: long enough to show a large differential, short enough to
-// terminate fast. The signal is the RATIO, not an absolute wall-clock number —
-// V8's regex optimizer keeps absolute times engine-dependent.
-const malicious = measure('a'.repeat(30) + '!');
+const benign = 'user@example.com';
+const malicious = 'a'.repeat(30) + '!';
 
-console.log('benign   :', JSON.stringify(benign));
-console.log('malicious:', JSON.stringify(malicious));
+// 30 chars is a measured ~14ms on V8 — safe to call inline, big enough for
+// the 100x differential. The signal is a RATIO, not an absolute millisecond
+// value; V8's optimizer makes absolute times vary by engine/version.
+const red = measure(vulnerable.validateEmail, malicious);
+const green = measure(patched.validateEmail, malicious);
+const benignPatched = measure(patched.validateEmail, benign);
 
-// Hard gate: the malicious input must run at least 100x slower than benign.
-// The reusable signal is the differential ratio, not a fixed millisecond value
-// (V8's optimizer makes absolute timings vary by engine/version).
+console.log('benign    (patched)   :', JSON.stringify(benignPatched));
+console.log('malicious (vulnerable):', JSON.stringify(red));
+console.log('malicious (patched)  :', JSON.stringify(green));
+
 const MIN_RATIO = 100;
-if (malicious.ms > benign.ms * MIN_RATIO) {
-  console.log('RESULT: ReDoS CONFIRMED (differential + hard timing threshold)');
+const redConfirmed = red.ms > benignPatched.ms * MIN_RATIO;
+const greenPasses = green.ms < benignPatched.ms * 10 && green.result === false;
+
+console.log('RED  vulnerable is slow :', redConfirmed);
+console.log('GREEN patched is fast   :', greenPasses);
+
+if (redConfirmed && greenPasses) {
+  console.log('RESULT: RED/GREEN CONFIRMED — fix eliminates the differential');
   process.exitCode = 0;
 } else {
-  console.log('RESULT: not reproduced in this run (engine may have optimized)');
+  console.log('RESULT: gate not met (engine-dependent timings)');
   process.exitCode = 1;
 }
